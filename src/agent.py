@@ -46,6 +46,14 @@ from src.audio_steps import (
     build_section_narration_track,
     remux_video_with_audio,
 )
+from src.cover_scene import generate_cover_manim_code
+from src.overview_scene import (
+    OVERVIEW_ENDING_LINE,
+    OVERVIEW_INTRO_LINE,
+    _merge_section_titles_with_ai,
+    build_overview_lecture_lines,
+    generate_overview_manim_code,
+)
 
 
 @dataclass
@@ -468,6 +476,134 @@ class TeachingVideoAgent:
             print(f"⚠️ 素材下载失败，使用原始分镜: {e}")
             return storyboard_data
 
+    def inject_cover_section(self) -> None:
+        """
+        在 sections 列表最前面注入一个「封面」section。
+
+        封面展示题目短名（大标题）+ 解题主题（副标题），并播放介绍旁白。
+        使用确定性模板生成 Manim 代码，保证稳定性。
+        """
+        if not self.outline:
+            print("⚠️ 大纲尚未生成，跳过封面注入")
+            return
+
+        if any(section.id == "section_cover" for section in self.sections):
+            print("🎬 封面 section 已存在，跳过注入")
+            return
+
+        intro_text = f"本视频将带你讲解：{self.outline.topic}"
+
+        cover_section = Section(
+            id="section_cover",
+            title=self.outline.topic,
+            lecture_lines=[intro_text],
+            animations=["Gradient background", "Create decoration lines", "FadeIn title", "FadeIn subtitle", "Play intro audio"],
+            estimated_duration=10,
+        )
+
+        self.sections.insert(0, cover_section)
+        print(f"🎬 已注入封面 section（题目：{self.outline.topic}）")
+
+    def _generate_cover_code(self, section: Section) -> str:
+        """为封面 section 使用确定性模板生成 Manim 代码。"""
+        section_steps = self.prepare_section_steps(section)
+
+        code = generate_cover_manim_code(
+            topic=self.outline.topic,
+            short_title=self.learning_topic,
+            section_steps=section_steps,
+        )
+
+        code_file = self.output_dir / f"{section.id}.py"
+        with open(code_file, "w", encoding="utf-8") as f:
+            f.write(code)
+
+        self.section_codes[section.id] = code
+        print(f"🎬 封面 section 代码已生成（模板化，含 TTS 旁白）")
+        return code
+
+    def inject_overview_section(self) -> None:
+        """
+        在 sections 列表最前面注入一个「解题导览」概述 section。
+
+        该方法使用 AI 合并精简 section titles，然后生成 lecture_lines。
+        概述 section 后续会正常走 TTS 管线和模板化代码生成（跳过 LLM Stage 3）。
+        """
+        if not self.outline or not self.sections:
+            print("⚠️ 大纲或分节尚未生成，跳过概述注入")
+            return
+
+        if any(section.id == "section_overview" for section in self.sections):
+            print("📋 概述 section 已存在，跳过注入")
+            return
+
+        section_titles = [
+            s.title for s in self.sections
+            if s.id not in ("section_overview", "section_cover")
+        ]
+
+        print("🤖 正在使用 AI 合并精简章节标题...")
+        merged_titles = _merge_section_titles_with_ai(
+            section_titles=section_titles,
+            topic=self.outline.topic,
+            api_func=self._request_api_and_track_tokens,
+        )
+        print(f"📋 合并后共 {len(merged_titles)} 条概要: {merged_titles}")
+
+        overview_lines = build_overview_lecture_lines(
+            section_titles=merged_titles,
+        )
+
+        overview_section = Section(
+            id="section_overview",
+            title="解题导览",
+            lecture_lines=overview_lines,
+            animations=["FadeIn title", "Sequential FadeIn bullet points", "FadeIn ending"],
+            estimated_duration=20,
+        )
+
+        self.sections.insert(0, overview_section)
+        print(f"📋 已注入概述 section（{len(overview_lines)} 条讲解行）")
+
+    def _generate_overview_code(self, section: Section) -> str:
+        """为概述 section 使用确定性模板生成 Manim 代码（跳过 LLM）。"""
+        import re as _re
+
+        section_steps = self.prepare_section_steps(section)
+
+        merged_titles = []
+        for line in section.lecture_lines:
+            if line == OVERVIEW_INTRO_LINE:
+                continue
+            if line == OVERVIEW_ENDING_LINE:
+                continue
+            if line == "让我们开始吧！":
+                continue
+
+            match = _re.match(r"^第[一二三四五六七八九十\d]+部分，(.+)$", line)
+            if match:
+                merged_titles.append(match.group(1).strip())
+                continue
+
+            cleaned = _re.sub(r"^[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]\s*", "", line)
+            if cleaned and cleaned != line:
+                merged_titles.append(cleaned)
+
+        code = generate_overview_manim_code(
+            section_titles=merged_titles,
+            section_steps=section_steps,
+        )
+
+        code = replace_base_class(code, base_class)
+
+        code_file = self.output_dir / f"{section.id}.py"
+        with open(code_file, "w", encoding="utf-8") as f:
+            f.write(code)
+
+        self.section_codes[section.id] = code
+        print(f"📋 概述 section 代码已生成（模板化，无需 LLM）")
+        return code
+
     def generate_section_code(self, section: Section, attempt: int = 1, feedback_improvements=None, error_message: str = None) -> str:
         """Generate Manim code for a single section
         
@@ -500,6 +636,13 @@ class TeachingVideoAgent:
                 code = f.read()
                 self.section_codes[section.id] = code
                 return code
+
+        if not feedback_improvements:
+            if section.id == "section_cover":
+                return self._generate_cover_code(section)
+            if section.id == "section_overview":
+                return self._generate_overview_code(section)
+
         # print(f"💻 正在为 {section.id} 生成 Manim 代码 (尝试 {attempt}/{self.max_regenerate_tries})...")
         regenerate_note = ""
         if attempt > 1:
@@ -1092,6 +1235,8 @@ class TeachingVideoAgent:
         try:
             self.generate_outline()
             self.generate_storyboard()
+            self.inject_overview_section()
+            self.inject_cover_section()
             self.generate_codes()
             self.render_all_sections()
             final_video = self.merge_videos()
