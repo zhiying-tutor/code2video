@@ -125,9 +125,13 @@ def get_prompt2_storyboard(
     4.  **脚本要求**:
         - 每一句旁白（Lecture Line）必须对应代码的解释
         - 每一个动画（Animation）必须对应数据的变化（Create, Transform, FadeOut）
+        - `section_0_intro` 是 overview scene 之后的自然续接，不是整支视频的重新开场
+        - `section_0_intro` 的前 1-2 句必须直接进入题目描述、输入输出、示例解释或直观现象，不能先寒暄
+        - `section_0_intro` 的首句禁止使用“大家好……”“今天我们来看……”“这道题叫……”“这节课我们会分几部分……”这类开场
+        - `section_0_intro` 禁止重复 overview 已经讲过的题目名、章节导览和讲解路线
         - **节奏控制**：根据用户画像中的动画节奏要求调整
         - **🔴 所有代码展示必须使用用户提供的标准答案代码原文，严禁修改！**
-    
+
     4.  **时长规划 (Duration Planning)**:
         - 每个 section 必须包含 `estimated_duration` 字段，单位为**秒**
         - 时长估算规则：

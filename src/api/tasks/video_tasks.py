@@ -67,7 +67,6 @@ def generate_video_task(
             create_profile_from_text,
             parse_profile_with_ai_sync,
         )
-        from src.utils import get_optimal_workers
         
         # 解析请求参数
         problem_description = request_data["problem_description"]
@@ -155,7 +154,7 @@ def generate_video_task(
             forced_difficulty_level=forced_difficulty_level,
             problem_description=problem_description,
             solution_code=solution_code,
-            max_code_token_length=60000,  # 提高 token 上限，避免分镜脚本被截断
+            max_code_token_length=50000,  # 提高 token 上限，避免分镜脚本被截断
             max_fix_bug_tries=10,
             max_regenerate_tries=10,
             max_feedback_gen_code_tries=5,
@@ -203,8 +202,18 @@ def generate_video_task(
         except Exception as e:
             callback.on_stage_failed(task_id, f"分镜脚本生成失败: {str(e)}")
             raise
+
+        # ========== 阶段 5: 注入封面 + 概述 ==========
+        task_id = callback.on_stage_start("inject_cover_overview", "正在注入封面与课程导览。")
+        try:
+            agent.inject_overview_section()
+            agent.inject_cover_section()
+            callback.on_stage_finish(task_id, "封面与课程导览注入成功。")
+        except Exception as e:
+            callback.on_stage_failed(task_id, f"封面与课程导览注入失败: {str(e)}")
+            raise
         
-        # ========== 阶段 5: 生成代码 ==========
+        # ========== 阶段 6: 生成代码 ==========
         task_id = callback.on_stage_start("generate_codes", "正在生成 Manim 代码。")
         try:
             agent.generate_codes()
@@ -213,7 +222,7 @@ def generate_video_task(
             callback.on_stage_failed(task_id, f"Manim 代码生成失败: {str(e)}")
             raise
         
-        # ========== 阶段 6: 渲染视频 ==========
+        # ========== 阶段 7: 渲染视频 ==========
         task_id = callback.on_stage_start("render_videos", "正在渲染视频片段。")
         try:
             agent.render_all_sections()
@@ -222,7 +231,7 @@ def generate_video_task(
             callback.on_stage_failed(task_id, f"视频片段渲染失败: {str(e)}")
             raise
         
-        # ========== 阶段 7: 合并视频 ==========
+        # ========== 阶段 8: 合并视频 ==========
         task_id = callback.on_stage_start("merge_videos", "正在合并视频。")
         try:
             final_video_path = agent.merge_videos()
@@ -233,7 +242,7 @@ def generate_video_task(
             callback.on_stage_failed(task_id, f"视频合并失败: {str(e)}")
             raise
         
-        # ========== 阶段 8: 保存视频 ==========
+        # ========== 阶段 9: 保存视频 ==========
         task_id = callback.on_stage_start("save_video", "正在保存视频文件。")
         try:
             # 准备元信息

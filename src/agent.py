@@ -119,8 +119,10 @@ class TeachingVideoAgent:
         
         # learning_topic 用于目录命名和日志，从题目描述中提取简短标题
         if self.problem_description:
-            first_line = self.problem_description.split('\n')[0].split('-')[0].strip()
-            self.learning_topic = first_line[:50] if len(first_line) > 50 else first_line
+            first_line = self.problem_description.split('\n')[0].strip()
+            first_sentence = re.split(r"[。；;\n]|示例\d+[:：]|限制[:：]", first_line, maxsplit=1)[0].strip()
+            main_title = re.split(r"[:：]", first_sentence, maxsplit=1)[0].strip()
+            self.learning_topic = main_title[:50] if len(main_title) > 50 else main_title
         else:
             self.learning_topic = "未命名题目"
         self.idx = idx

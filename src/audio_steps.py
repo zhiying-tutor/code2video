@@ -59,13 +59,53 @@ def retry_with_backoff(operation_name: str, func: Callable, max_retries: int, ba
     raise RuntimeError(f"{operation_name} failed: {last_error}")
 
 
+# ── 概述旁白扩写的特殊提示词 ─────────────────────────────────
+_OVERVIEW_EXPANSION_EXAMPLES = """
+你是教学视频旁白润色器，当前正在处理「课程概述/目录导览」部分的旁白。
+
+任务：
+- 将下面这条画面短句扩写成一条更自然、口语化、适合 TTS 播放的单句旁白
+- 必须像一位经验丰富的老师在课堂上介绍课程大纲一样自然流畅
+- 不要每句都用"接下来"开头，要有变化和衔接感
+- 必须保持原意，不要引入新知识点
+- 必须是"最小增量扩写"，不要写成长段
+- 输出只允许是一句纯文本，不要加引号、编号、解释
+
+参考范例（画面短句 → 优秀旁白）：
+- "本视频将分为以下几个部分进行讲解" → "在正式开始之前呢，我们先来看一下本节课的整体脉络"
+- "第一部分，基本概念" → "首先，我们会从基本概念入手，帮大家打好基础"
+- "第二部分，核心原理" → "在此基础上，第二部分我们来深入了解一下核心原理"
+- "第三部分，代码实现" → "理解了原理之后，第三部分我们就来动手写代码"
+- "第四部分，实战案例" → "第四部分，我们通过一个实战案例来巩固所学的知识"
+- "第五部分，性能优化" → "然后，第五部分我们会讲一讲性能优化的技巧"
+- "第六部分，常见问题" → "最后，我们会总结一些常见的问题和注意事项"
+- "好的，接下来让我们正式开始具体内容的学习吧" → "好，大致了解了课程安排之后，我们就正式进入第一部分的学习"
+
+画面短句：
+"""
+
+
+def _is_overview_screen_text(screen_text: str) -> bool:
+    import re as _re
+    if _re.search(r"第[一二三四五六七八九十\d]+部分", screen_text):
+        return True
+    if "本视频将分为" in screen_text or "本题将分为" in screen_text:
+        return True
+    if "让我们正式开始" in screen_text or "开始具体内容的学习" in screen_text:
+        return True
+    return False
+
+
 def expand_screen_text_to_spoken_script(
     screen_text: str,
     api_func: Callable,
     max_retries: int = 3,
     max_tokens: int = 300,
 ) -> str:
-    prompt = f"""
+    if _is_overview_screen_text(screen_text):
+        prompt = f"""{_OVERVIEW_EXPANSION_EXAMPLES}{screen_text}""".strip()
+    else:
+        prompt = f"""
 你是教学视频旁白润色器。
 
 任务：
@@ -342,6 +382,48 @@ def _extract_step_index_from_call(call: ast.Call, alias_offsets: dict[str, int])
     return None
 
 
+def _extract_step_index_from_subscript_arg(
+    call: ast.Call,
+    alias_offsets: dict[str, int],
+    arg_index: int = 0,
+) -> int | None:
+    if len(call.args) <= arg_index:
+        return None
+
+    candidate = call.args[arg_index]
+    if not isinstance(candidate, ast.Subscript):
+        return None
+
+    if isinstance(candidate.value, ast.Subscript):
+        inner = candidate.value
+        if not isinstance(inner.value, ast.Name):
+            return None
+
+        base_name = inner.value.id
+        step_index = _extract_constant_number(inner.slice)
+        if step_index is None:
+            return None
+
+        if base_name == "steps":
+            return int(step_index)
+        if base_name in alias_offsets:
+            return alias_offsets[base_name] + int(step_index)
+        return None
+
+    if isinstance(candidate.value, ast.Name):
+        base_name = candidate.value.id
+        step_index = _extract_constant_number(candidate.slice)
+        if step_index is None:
+            return None
+
+        if base_name == "steps":
+            return int(step_index)
+        if base_name in alias_offsets:
+            return alias_offsets[base_name] + int(step_index)
+
+    return None
+
+
 def _timeline_events_from_statements(
     statements,
     step_count: int,
@@ -366,6 +448,12 @@ def _timeline_events_from_statements(
                 if step_index is None or not (0 <= step_index < step_count):
                     raise ValueError("Unable to resolve step index from play_synced_step call")
                 events.append(("audio", float(step_index)))
+                continue
+
+            if attr == "add_sound":
+                step_index = _extract_step_index_from_subscript_arg(call, alias_offsets)
+                if step_index is not None and 0 <= step_index < step_count:
+                    events.append(("audio", float(step_index)))
                 continue
 
             if attr == "wait":
@@ -409,6 +497,8 @@ def _timeline_events_from_statements(
                 threshold = _extract_constant_number(test.comparators[0])
                 if threshold is not None:
                     condition_is_true = step_count > threshold
+            elif isinstance(test, ast.Name) and test.id == "steps":
+                condition_is_true = step_count > 0
 
             branch = stmt.body if condition_is_true else stmt.orelse
             _timeline_events_from_statements(branch, step_count, events, alias_offsets.copy())

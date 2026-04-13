@@ -67,7 +67,7 @@ class CoverScene(Scene):
         # ── 大标题（短名称，居中）──
         title = Text(
             "{safe_short_title}",
-            font="Noto Sans SC",
+            font="Noto Sans CJK SC",
             font_size=60,
             color="#7B4B2A",
             weight="BOLD",
@@ -77,7 +77,7 @@ class CoverScene(Scene):
         # ── 副标题（完整名称）──
         subtitle = Text(
             "{safe_topic}",
-            font="Noto Sans SC",
+            font="Noto Sans CJK SC",
             font_size=28,
             color="#8B5E3C",
         )
