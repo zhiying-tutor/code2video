@@ -650,3 +650,124 @@ V5.0 已经完整落地，当前正式链路是：
 - `play(...)` / `wait(...)` 的静音预算建模
 - 代码精讲类 section 的 few-shot 继续收紧
 - narration track 与视觉节奏的进一步压缩对齐
+
+---
+
+## 15. 视频概述（Overview Section）
+
+### 15.1 背景与教育理论
+
+V5.1 在视频最开始增加了一个「解题导览」概述 section，快速预览本节课将讲些什么。
+
+设计理念参考：
+
+- **先行组织者理论 (David Ausubel)**：在正式教学前给学习者一个概念框架，研究显示可提高 20-30% 的信息留存率
+- **信号原则 (Signaling Principle)**：突出材料组织结构的线索可以改善学习效果
+- **MIT OCW / 3Blue1Brown 混合风格**：先展示标题，然后逐一预览各章节主题
+
+### 15.2 技术实现
+
+概述 section 采用**确定性模板**生成 Manim 代码（不依赖 LLM），保证 100% 成功率：
+
+1. `inject_overview_section()` 在 `generate_storyboard()` 之后、`generate_codes()` 之前被调用
+2. 从大纲的 section titles 提取后，通过 **AI 进行聚合精简**（合并为 5-10 条核心要点），生成最终的 `lecture_lines`。
+3. 旁白文本走正常 TTS 管线（`expand_screen_text_to_spoken_script` → TTS → 物理测时）
+4. Manim 代码由 `src/overview_scene.py` 的 `generate_overview_manim_code()` 确定性生成
+5. 在 `generate_section_code()` 中，检测到 `section_overview` 后跳过 LLM，直接使用模板
+
+### 15.3 数据流
+
+```
+Stage 1 (大纲) → 提取 section titles
+    ↓
+inject_overview_section() → AI 合并精简标题 → 创建 Section("section_overview")
+    ↓
+Stage 2.5 (TTS) → 正常走 build_section_steps → 生成旁白音频
+    ↓
+Stage 3 (代码) → 检测到 section_overview → 使用确定性模板（跳过 LLM）
+    ↓
+渲染 → 回灌音轨 → 合并（overview 排在封面之后、正式内容之前）
+```
+
+### 15.4 视觉设计
+
+概述 section 的视觉效果：
+
+- 标题 "解题导览" 居中显示（大字，FadeIn）
+- "本节内容" 副标题 + 下划线装饰
+- 概要标题（由 AI 合并后）逐条显示，配合 `play_synced_step` 旁白
+- 如果内容过多，自动进行分页排版布局
+- 结束语 "让我们开始吧！"
+
+### 15.5 关键文件
+
+- `src/overview_scene.py`：确定性 Manim 模板生成器
+  - `build_overview_lecture_lines()` — 从 section titles 生成 lecture_lines
+  - `generate_overview_manim_code()` — 生成完整 Manim 代码
+- `src/agent.py`：
+  - `inject_overview_section()` — 在 sections 列表最前面注入概述 section
+  - `_generate_overview_code()` — 使用模板生成概述代码
+  - `inject_cover_section()` — 在 sections 列表最前面注入封面 section
+  - `_generate_cover_code()` — 使用模板生成封面代码
+  - `generate_section_code()` — 检测 section_overview / section_cover 后路由到模板
+  - `GENERATE_VIDEO()` — 在 storyboard 之后依次调用 `inject_overview_section()` 和 `inject_cover_section()`
+
+---
+
+## 16. 视频封面（Cover Section）
+
+### 16.1 背景
+
+V5.2 在视频最开头增加了一个「封面」section，仅展示知识点名称大字，作为视频的标题画面。
+
+### 16.2 视觉设计
+
+封面 section 的视觉效果：
+
+- **渐变背景**：135° 对角线渐变（`#fff6db` → `#f9ebe4` → `#fbd9c4`），与前端 `k2v-preview.html` 的播放器背景一致
+- **知识点名称**：居中超大字（font_size=52），金色 `#BE8944`，加粗，FadeIn 动画
+- **装饰线**：上下两条对称装饰线（金色 `#e4c8a6`），Create 动画从中心向两侧展开
+- **有旁白**：封面现在包含一句介绍性旁白（如“本视频将带你学习：XXX”），会走 TTS 管线并回灌音轨。
+- 动画结束后短暂淡出过渡
+
+### 16.3 技术实现
+
+封面 section 采用**确定性模板**生成 Manim 代码（不依赖 LLM），保证 100% 成功率：
+
+1. `inject_cover_section()` 在 `inject_overview_section()` 之后被调用，插入到 sections 最前面
+2. 封面**走 TTS 管线**（生成 `section_steps`、生成介绍语音频）
+3. Manim 代码由 `src/cover_scene.py` 的 `generate_cover_manim_code()` 确定性生成
+4. 在 `generate_section_code()` 中，检测到 `section_cover` 后跳过 LLM，直接使用模板
+5. 封面渲染成功后，会执行正常的音轨回灌流程
+
+### 16.4 数据流
+
+```
+Stage 1 (大纲) → 提取 topic 名称
+    ↓
+inject_cover_section() → 创建 Section("section_cover")
+    ↓
+Stage 2.5 (TTS) → 正常走 build_section_steps → 生成封面介绍语音频
+    ↓
+generate_section_code() → 检测到 section_cover → 使用确定性模板（跳过 LLM）
+    ↓
+渲染 → 音轨回灌 → 合并（cover 排在最前面）
+```
+
+### 16.5 与其他 section 的区别
+
+| 特性          | 封面 (cover) | 概述 (overview) | 普通 section |
+| ------------- | ------------ | --------------- | ------------ |
+| LLM 代码生成  | ❌ 跳过      | ❌ 跳过         | ✅ 使用      |
+| TTS 旁白      | ✅ 有        | ✅ 有           | ✅ 有        |
+| section_steps | ✅ 有        | ✅ 有           | ✅ 有        |
+| 音轨回灌      | ✅ 有        | ✅ 有           | ✅ 有        |
+| 排列顺序      | 第 1 位      | 第 2 位         | 第 3+ 位     |
+
+### 16.6 关键文件
+
+- `src/cover_scene.py`：确定性 Manim 模板生成器
+  - `generate_cover_manim_code(topic)` — 生成完整封面 Manim 代码
+- `src/agent.py`：
+  - `inject_cover_section()` — 在 sections 列表最前面注入封面 section
+  - `_generate_cover_code()` — 使用模板生成封面代码
